@@ -1,0 +1,62 @@
+#!/usr/bin/with-contenv bash
+# shellcheck shell=bash
+
+# Generate database.inc.php from environment variables.
+# This runs AFTER init-piwigo-config has set up the /config symlinks,
+# so /app/www/public/local -> /config/www/local is already in place.
+
+DB_CONFIG_DIR="/config/www/local/config"
+DB_CONFIG_FILE="${DB_CONFIG_DIR}/database.inc.php"
+
+echo "[init-piwigo-dbconfig] Checking environment variables..."
+echo "  PIWIGO_DB_HOST: '${PIWIGO_DB_HOST}'"
+echo "  PIWIGO_DB_USER: '${PIWIGO_DB_USER}'"
+echo "  PIWIGO_DB_PASSWORD: length=${#PIWIGO_DB_PASSWORD}"
+echo "  PIWIGO_DB_NAME: '${PIWIGO_DB_NAME}'"
+echo "  PIWIGO_DB_PREFIX: '${PIWIGO_DB_PREFIX}'"
+
+if [ -z "$PIWIGO_DB_HOST" ]; then
+  echo "[init-piwigo-dbconfig] CRITICAL: PIWIGO_DB_HOST not set. Skipping database.inc.php generation."
+  echo "[init-piwigo-dbconfig] Existing config file status:"
+  ls -l "$DB_CONFIG_FILE" 2>/dev/null || echo "  File not found at $DB_CONFIG_FILE"
+  exit 0
+fi
+
+# Verify symlink is in place (sanity check)
+if [ -L /app/www/public/local ]; then
+  echo "[init-piwigo-dbconfig] Symlink OK: /app/www/public/local -> $(readlink /app/www/public/local)"
+else
+  echo "[init-piwigo-dbconfig] WARNING: /app/www/public/local is NOT a symlink. Creating directory manually."
+fi
+
+echo "[init-piwigo-dbconfig] Generating ${DB_CONFIG_FILE}..."
+
+# Ensure directory exists
+mkdir -p "$DB_CONFIG_DIR"
+
+# Write the config file (must match what Piwigo's install.php generates)
+cat > "$DB_CONFIG_FILE" <<PHPEOF
+<?php
+\$conf['dblayer'] = 'mysqli';
+\$conf['db_base'] = '${PIWIGO_DB_NAME:-piwigo}';
+\$conf['db_user'] = '${PIWIGO_DB_USER}';
+\$conf['db_password'] = '${PIWIGO_DB_PASSWORD}';
+\$conf['db_host'] = '${PIWIGO_DB_HOST}';
+
+\$prefixeTable = '${PIWIGO_DB_PREFIX:-piwigo_}';
+
+define('PHPWG_INSTALLED', true);
+define('PWG_CHARSET', 'utf-8');
+define('DB_CHARSET', 'utf8');
+define('DB_COLLATE', '');
+
+?>
+PHPEOF
+
+chmod 666 "$DB_CONFIG_FILE" || echo "[init-piwigo-dbconfig] WARNING: chmod failed"
+
+echo "[init-piwigo-dbconfig] Final check:"
+ls -l "$DB_CONFIG_FILE"
+ls -l /app/www/public/local/config/database.inc.php 2>/dev/null
+
+echo "[init-piwigo-dbconfig] database.inc.php written successfully."

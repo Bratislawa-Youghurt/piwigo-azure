@@ -1,0 +1,45 @@
+#!/bin/bash
+
+# Generate database.inc.php from environment variables
+# and patch Piwigo's mysqli dblayer for SSL connections.
+# This runs at container startup, before services start.
+
+DB_CONFIG_DIR="/config/www/local/config"
+DB_CONFIG_FILE="${DB_CONFIG_DIR}/database.inc.php"
+SSL_CA_PATH="/usr/local/share/ca-certificates/DigiCertGlobalRootG2.crt.pem"
+DBLAYER_FILE="/app/www/public/include/dblayer/functions_mysqli.inc.php"
+
+# --- 1. Patch Piwigo's dblayer to force SSL connections ---
+# Piwigo uses "new mysqli()" which does NOT support SSL.
+# We replace it with mysqli_init() + mysqli_ssl_set() + mysqli_real_connect().
+if [ -f "$DBLAYER_FILE" ] && grep -q 'new mysqli' "$DBLAYER_FILE"; then
+    cat > /tmp/patch_ssl.php <<'PATCH_EOF'
+<?php
+$file = $argv[1];
+$ssl_ca = $argv[2];
+$code = file_get_contents($file);
+
+$old = '$mysqli = new mysqli($host, $user, $password, $dbname, $port, $socket);';
+$new = '$mysqli = mysqli_init();' . "\n" .
+       '  mysqli_ssl_set($mysqli, null, null, "' . $ssl_ca . '", null, null);' . "\n" .
+       '  mysqli_real_connect($mysqli, $host, $user, $password, $dbname, $port, $socket, MYSQLI_CLIENT_SSL);';
+
+if (strpos($code, $old) === false) {
+    echo "WARNING: Could not find target code to patch.\n";
+    exit(1);
+}
+
+$code = str_replace($old, $new, $code);
+file_put_contents($file, $code);
+echo "SSL patch applied.\n";
+PATCH_EOF
+    php /tmp/patch_ssl.php "$DBLAYER_FILE" "$SSL_CA_PATH"
+    rm -f /tmp/patch_ssl.php
+    echo "[99-configure-db] Patched functions_mysqli.inc.php for SSL."
+else
+    echo "[99-configure-db] dblayer already patched or file not found, skipping."
+fi
+
+# --- DB config generation has moved to s6-rc.d/init-piwigo-dbconfig ---
+# It must run AFTER init-piwigo-config sets up the /config symlinks.
+echo "[99-configure-db] SSL patch phase complete. DB config will be generated later by init-piwigo-dbconfig."

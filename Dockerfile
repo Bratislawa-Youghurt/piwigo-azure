@@ -1,65 +1,54 @@
-# syntax=docker/dockerfile:1
+FROM lscr.io/linuxserver/piwigo:latest
 
-FROM ghcr.io/linuxserver/baseimage-alpine-nginx:3.22
+# 1. Install OpenSSH and set root password
+RUN apk add --no-cache openssh \
+  && ssh-keygen -A \
+  && echo "root:Docker!" | chpasswd
 
-# set version label
-ARG BUILD_DATE
-ARG VERSION
-ARG PIWIGO_RELEASE
-LABEL build_version="Linuxserver.io version:- ${VERSION} Build-date:- ${BUILD_DATE}"
-LABEL maintainer="thespad"
+# 2. Configure SSH for Azure (Port 2222)
+COPY sshd_config /etc/ssh/
 
-RUN \
-  echo "**** install packages ****" && \
-  apk add --no-cache \
-    exiftool \
-    ffmpeg \
-    imagemagick \
-    imagemagick-heic \
-    libjpeg-turbo-utils \
-    mediainfo \
-    php84-apcu \
-    php84-cgi \
-    php84-ctype \
-    php84-curl \
-    php84-dom \
-    php84-exif \
-    php84-gd \
-    php84-ldap \
-    php84-mysqli \
-    php84-mysqlnd \
-    php84-pear \
-    php84-pecl-imagick \
-    php84-xsl \
-    php84-zip \
-    poppler-utils \
-    re2c && \
-  echo "**** modify php-fpm process limits ****" && \
-  sed -i 's/pm.max_children = 5/pm.max_children = 32/' /etc/php84/php-fpm.d/www.conf && \
-  echo "**** configure php-fpm to pass env vars ****" && \
-  sed -E -i 's/^;?clear_env ?=.*$/clear_env = no/g' /etc/php84/php-fpm.d/www.conf && \
-  if ! grep -qxF 'clear_env = no' /etc/php84/php-fpm.d/www.conf; then echo 'clear_env = no' >> /etc/php84/php-fpm.d/www.conf; fi && \
-  echo "env[PATH] = /usr/local/bin:/usr/bin:/bin" >> /etc/php84/php-fpm.conf && \
-  echo "**** download piwigo ****" && \
-  if [ -z ${PIWIGO_RELEASE+x} ]; then \
-    PIWIGO_RELEASE=$(curl -sX GET "https://api.github.com/repos/Piwigo/Piwigo/releases/latest" \
-    | awk '/tag_name/{print $4;exit}' FS='[""]'); \
-  fi && \
-  mkdir -p /app/www/public && \
-  curl -o \
-    /tmp/piwigo.zip -L \
-    "https://piwigo.org/download/dlcounter.php?code=${PIWIGO_RELEASE}" && \
-  unzip -q /tmp/piwigo.zip -d /tmp && \
-  mv /tmp/piwigo/* /app/www/public && \
-  printf "Linuxserver.io version: ${VERSION}\nBuild-date: ${BUILD_DATE}" > /build_version && \
-  echo "**** cleanup ****" && \
-  rm -rf \
-    /tmp/*
+# 3. Bake in the SSL Cert for MySQL
+COPY DigiCertGlobalRootG2.crt.pem /usr/local/share/ca-certificates/DigiCertGlobalRootG2.crt.pem
+RUN update-ca-certificates
 
-# copy local files
-COPY root/ /
+# 4. Copy custom services
+# Only copy our specific additions to avoid overwriting base image files 
+# (which might have CRLF issues from the local windows repo)
+COPY root/custom-services.d/ /custom-services.d/
+COPY root/custom-cont-init.d/ /custom-cont-init.d/
 
-# ports and volumes
-EXPOSE 80 443
+# 4b. Copy s6-rc service for DB config generation (runs after init-piwigo-config)
+COPY root/etc/s6-overlay/s6-rc.d/init-piwigo-dbconfig/ /etc/s6-overlay/s6-rc.d/init-piwigo-dbconfig/
+COPY root/etc/s6-overlay/s6-rc.d/init-config-end/dependencies.d/init-piwigo-dbconfig /etc/s6-overlay/s6-rc.d/init-config-end/dependencies.d/init-piwigo-dbconfig
+COPY root/etc/s6-overlay/s6-rc.d/user/contents.d/init-piwigo-dbconfig /etc/s6-overlay/s6-rc.d/user/contents.d/init-piwigo-dbconfig
 
-VOLUME /config /gallery
+# 5. Copy PHP configuration overrides (mysqli SSL, upload limits)
+COPY root/etc/php84/conf.d/piwigo.ini /etc/php84/conf.d/piwigo.ini
+
+# 6. Fix permissions and line endings for scripts and configs
+RUN chmod +x /custom-services.d/sshd \
+  && chmod +x /custom-cont-init.d/99-configure-db \
+  && chmod +x /etc/s6-overlay/s6-rc.d/init-piwigo-dbconfig/run \
+  && sed -i 's/\r$//' /custom-services.d/sshd \
+  && sed -i 's/\r$//' /custom-cont-init.d/99-configure-db \
+  && sed -i 's/\r$//' /etc/s6-overlay/s6-rc.d/init-piwigo-dbconfig/run \
+  && sed -i 's/\r$//' /etc/s6-overlay/s6-rc.d/init-piwigo-dbconfig/up \
+  && sed -i 's/\r$//' /etc/s6-overlay/s6-rc.d/init-piwigo-dbconfig/type \
+  && sed -i 's/\r$//' /etc/ssh/sshd_config \
+  && sed -i 's/\r$//' /etc/s6-overlay/s6-rc.d/init-piwigo-config/run
+
+# 7. Add chown/lsiown wrappers to bypass Azure Files permission errors
+# LinuxServer images try to chown /config and /gallery on startup via both
+# 'chown' and 'lsiown'. This fails on Azure Files (SMB).
+# We wrap both to always succeed silently.
+RUN rm -f /bin/chown \
+  && printf '#!/bin/sh\nbusybox chown "$@" 2>/dev/null || true\n' > /bin/chown \
+  && chmod +x /bin/chown \
+  && if [ -f /usr/local/bin/lsiown ]; then \
+  cp /usr/local/bin/lsiown /usr/local/bin/lsiown.real; \
+  printf '#!/bin/sh\n/usr/local/bin/lsiown.real "$@" 2>/dev/null || true\n' > /usr/local/bin/lsiown; \
+  chmod +x /usr/local/bin/lsiown; \
+  fi
+
+EXPOSE 2222 80

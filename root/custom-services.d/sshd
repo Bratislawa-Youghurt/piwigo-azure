@@ -1,0 +1,15 @@
+#!/usr/bin/with-contenv bash
+set -e
+
+# Export environment variables so they're available in SSH sessions
+eval $(printenv | sed -n "s/^\([^=]\+\)=\(.*\)$/export \1=\2/p" | sed 's/"/\\\\"/g' | sed '/=/s//="/' | sed 's/$/"/' >> /etc/profile)
+
+# Ensure /run directory exists for PID file, and /var/run/sshd for privsep
+mkdir -p /run
+mkdir -p /var/run/sshd
+
+# Generate host keys if missing (safety net)
+ssh-keygen -A 2>/dev/null
+
+echo "Starting SSH ..."
+exec /usr/sbin/sshd -D -e
