@@ -1,8 +1,19 @@
 param (
-    [string]$RegistryName = "bycontreg",
-    [string]$ImageName = "piwigo-custom",
-    [string]$Tag = "v1"
+    [string]$ConfigFileName = "build_config.json"
 )
+
+$scriptPath = $PSScriptRoot
+$configPath = Join-Path $scriptPath $ConfigFileName
+
+if (!(Test-Path $configPath)) {
+    Write-Error "Configuration file not found at $configPath"
+    exit 1
+}
+
+$config = Get-Content $configPath -Raw | ConvertFrom-Json
+$RegistryName = $config.RegistryName
+$ImageName = $config.ImageName
+$Tag = $config.Tag
 
 $ConfirmPreference = 'None'
 $ErrorActionPreference = 'Stop'

@@ -313,3 +313,35 @@ Once registered you can define the dockerfile to use with `-f Dockerfile.aarch64
 * **14.10.16:** - Add version layer information.
 * **10.09.16:** - Add layer badges to README.
 * **29.08.15:** - Initial Release.
+
+## Custom Build Script
+
+A PowerShell script `build_and_push.ps1` is provided to build the container image and push it to an Azure Container Registry (ACR).
+
+### Configuration
+
+The script reads its configuration from `build_config.json` in the same directory. You can create this file with the following structure:
+
+```json
+{
+    "RegistryName": "your_registry_name",
+    "ImageName": "your_image_name",
+    "Tag": "your_tag"
+}
+```
+
+### Usage
+
+1.  Ensure you are logged into Azure via `az login`.
+2.  Update `build_config.json` with your registry details.
+3.  Run the script:
+
+    ```powershell
+    .\build_and_push.ps1
+    ```
+
+The script will:
+1.  Read the configuration.
+2.  Build the Docker image using `az acr build`.
+3.  Push the image to the specified ACR.
+4.  Output the command to update your Azure Web App with the new image.
